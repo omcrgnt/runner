@@ -1,4 +1,4 @@
-module github.com/mcrgnt/runner
+module github.com/omcrgnt/runner
 
 go 1.26.1
 
