@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -12,8 +13,17 @@ type runner struct {
 	resources []any
 }
 
-func New(resources []any) *runner {
-	return &runner{resources: resources}
+func New(pool Pool) *runner {
+	return &runner{resources: collect(pool)}
+}
+
+func collect(pool Pool) []any {
+	var resources []any
+	pool.Walk(func(_ reflect.Type, res any) bool {
+		resources = append(resources, res)
+		return true
+	})
+	return resources
 }
 
 func (r *runner) Run(rctx context.Context) error {

@@ -3,9 +3,20 @@ package runner
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
+
+type slicePool []any
+
+func (p slicePool) Walk(fn func(reflect.Type, any) bool) {
+	for _, res := range p {
+		if !fn(reflect.TypeOf(res), res) {
+			return
+		}
+	}
+}
 
 type mockResource struct {
 	id        string
@@ -43,7 +54,7 @@ func TestRunner_StopOrder(t *testing.T) {
 	db := &passiveResource{&mockResource{id: "db"}}
 
 	// Порядок в списке: сначала бд, потом сервер (как после DAG)
-	r := New([]any{db, server})
+	r := New(slicePool{db, server})
 
 	ctx := context.Background()
 
@@ -64,7 +75,7 @@ func TestRunner_FailFast(t *testing.T) {
 	res1 := &activeResource{&mockResource{id: "ok"}}
 	res2 := &activeResource{&mockResource{id: "fail", startErr: errBoom}}
 
-	r := New([]any{res1, res2})
+	r := New(slicePool{res1, res2})
 
 	err := r.Run(context.Background())
 
