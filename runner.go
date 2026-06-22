@@ -4,33 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 
+	"github.com/omcrgnt/res"
 	"golang.org/x/sync/errgroup"
 )
 
-type runner struct {
+// Runner runs and stops [Starter]/[Closer] resources from a [res.Registry].
+type Runner struct{}
+
+func (r *Runner) NewResource() (any, error) {
+	return &Runner{}, nil
+}
+
+type engine struct {
 	resources []any
 }
 
-func New(pool Pool) *runner {
-	return &runner{resources: collect(pool)}
+func newEngine(reg res.Registry) *engine {
+	return &engine{resources: collect(reg)}
 }
 
-func collect(pool Pool) []any {
+// New builds a runner engine from reg without registering a resource (tests).
+func New(reg res.Registry) *engine {
+	return newEngine(reg)
+}
+
+func collect(reg res.Registry) []any {
 	var resources []any
-	pool.Walk(func(_ reflect.Type, res any) bool {
-		resources = append(resources, res)
+	reg.WalkEntries(func(e res.Entry) bool {
+		resources = append(resources, e.Value)
 		return true
 	})
 	return resources
 }
 
-func (r *runner) Run(rctx context.Context) error {
+func (r *Runner) Run(ctx context.Context, reg res.Registry) error {
+	return newEngine(reg).run(ctx)
+}
+
+func (r *Runner) Stop(ctx context.Context, reg res.Registry) error {
+	return newEngine(reg).stop(ctx)
+}
+
+func (e *engine) run(rctx context.Context) error {
 	group, ctx := errgroup.WithContext(rctx)
 
-	for _, res := range r.resources {
-		if s, ok := res.(Starter); ok {
+	for _, resource := range e.resources {
+		if s, ok := resource.(Starter); ok {
 			starter := s
 			group.Go(func() error {
 				if err := starter.Start(ctx); err != nil {
@@ -44,27 +64,27 @@ func (r *runner) Run(rctx context.Context) error {
 	return group.Wait()
 }
 
-func (r *runner) Stop(ctx context.Context) error {
+func (e *engine) stop(ctx context.Context) error {
 	var errs []error
 
-	for i := len(r.resources) - 1; i >= 0; i-- {
-		res := r.resources[i]
-		if sc, ok := res.(StartCloser); ok {
+	for i := len(e.resources) - 1; i >= 0; i-- {
+		resource := e.resources[i]
+		if sc, ok := resource.(StartCloser); ok {
 			if err := sc.Close(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("active resource %T: %w", res, err))
+				errs = append(errs, fmt.Errorf("active resource %T: %w", resource, err))
 			}
 		}
 	}
 
-	for i := len(r.resources) - 1; i >= 0; i-- {
-		res := r.resources[i]
+	for i := len(e.resources) - 1; i >= 0; i-- {
+		resource := e.resources[i]
 
-		closer, isCloser := res.(Closer)
-		_, isActive := res.(StartCloser)
+		closer, isCloser := resource.(Closer)
+		_, isActive := resource.(StartCloser)
 
 		if isCloser && !isActive {
 			if err := closer.Close(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("passive resource %T: %w", res, err))
+				errs = append(errs, fmt.Errorf("passive resource %T: %w", resource, err))
 			}
 		}
 	}
