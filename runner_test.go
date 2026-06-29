@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/omcrgnt/res/restest"
 )
 
 type mockResource struct {
@@ -27,6 +25,7 @@ func (m *activeResource) Start(ctx context.Context) error {
 	<-ctx.Done()
 	return nil
 }
+
 func (m *activeResource) Close(ctx context.Context) error {
 	m.closedAt = time.Now()
 	return m.closeErr
@@ -43,17 +42,22 @@ func TestRunner_StopOrder(t *testing.T) {
 	server := &activeResource{&mockResource{id: "server"}}
 	db := &passiveResource{&mockResource{id: "db"}}
 
-	r := New(restest.With(db, server))
+	r := &Runner{
+		starters: []Starter{server},
+		closers:  []Closer{db, server},
+	}
 
 	ctx := context.Background()
 
-	go r.run(ctx)
+	go func() { _ = r.Run(ctx) }()
 	time.Sleep(10 * time.Millisecond)
 
-	r.stop(ctx)
+	if err := r.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	if db.closedAt.Before(server.closedAt) {
-		t.Error("expected server (active) to be closed before db (passive)")
+		t.Error("expected server to be closed before db (reverse registration order)")
 	}
 }
 
@@ -62,32 +66,35 @@ func TestRunner_FailFast(t *testing.T) {
 	res1 := &activeResource{&mockResource{id: "ok"}}
 	res2 := &activeResource{&mockResource{id: "fail", startErr: errBoom}}
 
-	r := New(restest.With(res1, res2))
+	r := &Runner{starters: []Starter{res1, res2}}
 
-	err := r.run(context.Background())
+	err := r.Run(context.Background())
 
 	if !errors.Is(err, errBoom) {
 		t.Errorf("expected error %v, got %v", errBoom, err)
 	}
 }
 
-func TestRunner_NewResource(t *testing.T) {
-	var r Runner
-	got, err := r.NewResource()
-	if err != nil {
+func TestRunner_StopPassive(t *testing.T) {
+	db := &passiveResource{&mockResource{id: "db"}}
+	r := &Runner{closers: []Closer{db}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := r.Stop(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if _, ok := got.(*Runner); !ok {
-		t.Fatalf("expected *Runner, got %T", got)
 	}
 }
 
-func TestRunner_RunStopViaRegistry(t *testing.T) {
-	reg := restest.With(&passiveResource{&mockResource{id: "db"}})
-	var r Runner
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := r.Stop(ctx, reg); err != nil {
-		t.Fatal(err)
+func TestRunner_Inject(t *testing.T) {
+	server := &activeResource{&mockResource{id: "server"}}
+	r := &Runner{}
+	r.Inject([]any{
+		[]Starter{server},
+		[]Closer{server},
+	})
+	if len(r.starters) != 1 || len(r.closers) != 1 {
+		t.Fatalf("inject: starters=%d closers=%d", len(r.starters), len(r.closers))
 	}
 }

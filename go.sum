@@ -1,4 +1,4 @@
-github.com/omcrgnt/res v0.20.2 h1:4NNN6gOEpIu1bWTlscGvDbxos6n5fymCpPIy8KzJqtM=
-github.com/omcrgnt/res v0.20.2/go.mod h1:mYMNfATQOqfJ+jOBPY/eZoKWlnmfSggkQCmX5xkt2Fc=
+github.com/omcrgnt/res v0.22.0 h1:OCtaKOvcZq2johftmw6ZcfY9k5rmyfVOyHFeRTv0kOU=
+github.com/omcrgnt/res v0.22.0/go.mod h1:mYMNfATQOqfJ+jOBPY/eZoKWlnmfSggkQCmX5xkt2Fc=
 golang.org/x/sync v0.21.0 h1:HLII4xRRTtCRkxYp4HNFF0Js/Og6q2i++KXbg0gHCwM=
 golang.org/x/sync v0.21.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
