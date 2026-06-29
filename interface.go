@@ -9,8 +9,3 @@ type Starter interface {
 type Closer interface {
 	Close(ctx context.Context) error
 }
-
-type StartCloser interface {
-	Starter
-	Closer
-}

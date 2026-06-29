@@ -1,0 +1,23 @@
+version: '3'
+
+tasks:
+  test:
+    desc: "Запуск Go тестов через Docker"
+    cmds:
+      - task: docker-go
+        vars:
+          GO_CMD: go test -v ./...
+
+  docker-go:
+    internal: true
+    cmds:
+      - |
+        docker run --rm \
+          -v "{{.USER_WORKING_DIR}}:/workspace" \
+          -w /workspace \
+          -e GOCACHE=/tmp/go-cache \
+          -e GOPATH=/tmp/go-path \
+          -e GOWORK=off \
+          --user $(id -u):$(id -g) \
+          golang:alpine \
+          {{.GO_CMD}}

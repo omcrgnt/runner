@@ -5,88 +5,58 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/omcrgnt/res"
 	"golang.org/x/sync/errgroup"
 )
 
-// Runner runs and stops [Starter]/[Closer] resources from a [res.Registry].
-type Runner struct{}
-
-func (r *Runner) NewResource() (any, error) {
-	return &Runner{}, nil
+// Runner starts [Starter] and stops [Closer] resources injected via sdi after [Deps].
+type Runner struct {
+	starters []Starter
+	closers  []Closer
 }
 
-type engine struct {
-	resources []any
+func (r *Runner) Deps() []any {
+	return []any{
+		([]Starter)(nil),
+		([]Closer)(nil),
+	}
 }
 
-func newEngine(reg res.Registry) *engine {
-	return &engine{resources: collect(reg)}
-}
-
-// New builds a runner engine from reg without registering a resource (tests).
-func New(reg res.Registry) *engine {
-	return newEngine(reg)
-}
-
-func collect(reg res.Registry) []any {
-	var resources []any
-	reg.WalkEntries(func(e res.Entry) bool {
-		resources = append(resources, e.Value)
-		return true
-	})
-	return resources
-}
-
-func (r *Runner) Run(ctx context.Context, reg res.Registry) error {
-	return newEngine(reg).run(ctx)
-}
-
-func (r *Runner) Stop(ctx context.Context, reg res.Registry) error {
-	return newEngine(reg).stop(ctx)
-}
-
-func (e *engine) run(rctx context.Context) error {
-	group, ctx := errgroup.WithContext(rctx)
-
-	for _, resource := range e.resources {
-		if s, ok := resource.(Starter); ok {
-			starter := s
-			group.Go(func() error {
-				if err := starter.Start(ctx); err != nil {
-					return fmt.Errorf("starter %T failed: %w", starter, err)
-				}
-				return nil
-			})
+func (r *Runner) Inject(args []any) {
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case []Starter:
+			r.starters = v
+		case []Closer:
+			r.closers = v
 		}
+	}
+}
+
+func (r *Runner) Run(ctx context.Context) error {
+	group, ctx := errgroup.WithContext(ctx)
+
+	for _, s := range r.starters {
+		starter := s
+		group.Go(func() error {
+			if err := starter.Start(ctx); err != nil {
+				return fmt.Errorf("starter %T failed: %w", starter, err)
+			}
+			return nil
+		})
 	}
 
 	return group.Wait()
 }
 
-func (e *engine) stop(ctx context.Context) error {
+func (r *Runner) Stop(ctx context.Context) error {
 	var errs []error
 
-	for i := len(e.resources) - 1; i >= 0; i-- {
-		resource := e.resources[i]
-		if sc, ok := resource.(StartCloser); ok {
-			if err := sc.Close(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("active resource %T: %w", resource, err))
-			}
+	for i := len(r.closers) - 1; i >= 0; i-- {
+		c := r.closers[i]
+		if err := c.Close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("closer %T: %w", c, err))
 		}
 	}
 
-	for i := len(e.resources) - 1; i >= 0; i-- {
-		resource := e.resources[i]
-
-		closer, isCloser := resource.(Closer)
-		_, isActive := resource.(StartCloser)
-
-		if isCloser && !isActive {
-			if err := closer.Close(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("passive resource %T: %w", resource, err))
-			}
-		}
-	}
 	return errors.Join(errs...)
 }
