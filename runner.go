@@ -10,8 +10,9 @@ import (
 
 // Runner starts [Starter] and stops [Closer] resources injected via sdi after [Deps].
 type Runner struct {
-	starters []Starter
-	closers  []Closer
+	starters      []Starter
+	closers       []Closer
+	stopLifecycle context.CancelFunc
 }
 
 func (r *Runner) Deps() []any {
@@ -33,22 +34,40 @@ func (r *Runner) Inject(args []any) {
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	group, ctx := errgroup.WithContext(ctx)
+	lifecycle, stop := context.WithCancel(ctx)
+	r.stopLifecycle = stop
+
+	var g errgroup.Group
 
 	for _, s := range r.starters {
 		starter := s
-		group.Go(func() error {
-			if err := starter.Start(ctx); err != nil {
+		g.Go(func() error {
+			if err := starter.Start(lifecycle); err != nil {
+				stop()
 				return fmt.Errorf("starter %T failed: %w", starter, err)
 			}
 			return nil
 		})
 	}
 
-	return group.Wait()
+	if err := g.Wait(); err != nil {
+		r.releaseLifecycle()
+		return err
+	}
+	return nil
+}
+
+func (r *Runner) releaseLifecycle() {
+	if r.stopLifecycle == nil {
+		return
+	}
+	r.stopLifecycle()
+	r.stopLifecycle = nil
 }
 
 func (r *Runner) Stop(ctx context.Context) error {
+	r.releaseLifecycle()
+
 	var errs []error
 
 	for i := len(r.closers) - 1; i >= 0; i-- {

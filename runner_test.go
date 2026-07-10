@@ -38,6 +38,65 @@ func (m *passiveResource) Close(ctx context.Context) error {
 	return m.closeErr
 }
 
+// immediateStarter returns from Start without blocking (like srv-http today).
+type immediateStarter struct {
+	mockResource
+	lifecycle context.Context
+}
+
+func (m *immediateStarter) Start(ctx context.Context) error {
+	m.isStarted = true
+	m.lifecycle = ctx
+	return nil
+}
+
+func TestRunner_LifecycleCtxAliveAfterImmediateStart(t *testing.T) {
+	starter := &immediateStarter{mockResource: mockResource{id: "http"}}
+	r := &Runner{starters: []Starter{starter}}
+
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := r.Run(parent); err != nil {
+		t.Fatal(err)
+	}
+	if !starter.isStarted {
+		t.Fatal("starter not started")
+	}
+	if err := starter.lifecycle.Err(); err != nil {
+		t.Fatalf("lifecycle ctx canceled after Run: %v", err)
+	}
+
+	cancel()
+	if err := starter.lifecycle.Err(); err == nil {
+		t.Fatal("expected lifecycle ctx canceled after parent shutdown")
+	}
+}
+
+func TestRunner_FailFastCancelsBlockingStarter(t *testing.T) {
+	errBoom := errors.New("boom")
+	blocking := &activeResource{&mockResource{id: "blocking"}}
+	failing := &activeResource{&mockResource{id: "fail", startErr: errBoom}}
+
+	r := &Runner{starters: []Starter{blocking, failing}}
+
+	done := make(chan struct{})
+	go func() {
+		_ = r.Run(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not finish after starter failure")
+	}
+
+	if !blocking.isStarted {
+		t.Fatal("blocking starter was not started")
+	}
+}
+
 func TestRunner_StopOrder(t *testing.T) {
 	server := &activeResource{&mockResource{id: "server"}}
 	db := &passiveResource{&mockResource{id: "db"}}
