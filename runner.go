@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -12,6 +13,8 @@ import (
 type Runner struct {
 	starters      []Starter
 	closers       []Closer
+	started       []bool
+	startedMu     sync.Mutex
 	stopLifecycle context.CancelFunc
 }
 
@@ -37,15 +40,20 @@ func (r *Runner) Run(ctx context.Context) error {
 	lifecycle, stop := context.WithCancel(ctx)
 	r.stopLifecycle = stop
 
+	r.startedMu.Lock()
+	r.started = make([]bool, len(r.starters))
+	r.startedMu.Unlock()
+
 	var g errgroup.Group
 
-	for _, s := range r.starters {
-		starter := s
+	for i, s := range r.starters {
+		i, starter := i, s
 		g.Go(func() error {
 			if err := starter.Start(lifecycle); err != nil {
 				stop()
 				return fmt.Errorf("starter %T failed: %w", starter, err)
 			}
+			r.setStarted(i, true)
 			return nil
 		})
 	}
@@ -55,6 +63,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (r *Runner) setStarted(i int, v bool) {
+	r.startedMu.Lock()
+	defer r.startedMu.Unlock()
+	if i >= 0 && i < len(r.started) {
+		r.started[i] = v
+	}
+}
+
+func (r *Runner) isStarted(i int) bool {
+	r.startedMu.Lock()
+	defer r.startedMu.Unlock()
+	return i >= 0 && i < len(r.started) && r.started[i]
 }
 
 func (r *Runner) releaseLifecycle() {
@@ -70,12 +92,36 @@ func (r *Runner) Stop(ctx context.Context) error {
 
 	var errs []error
 
-	for i := len(r.closers) - 1; i >= 0; i-- {
-		c := r.closers[i]
+	for i, s := range r.starters {
+		if !r.isStarted(i) {
+			continue
+		}
+		c, ok := s.(Closer)
+		if !ok {
+			continue
+		}
+		if err := c.Close(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("closer %T: %w", c, err))
+		}
+	}
+
+	for _, c := range r.closers {
+		if r.isAlsoStarter(c) {
+			continue
+		}
 		if err := c.Close(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("closer %T: %w", c, err))
 		}
 	}
 
 	return errors.Join(errs...)
+}
+
+func (r *Runner) isAlsoStarter(c Closer) bool {
+	for _, s := range r.starters {
+		if any(s) == any(c) {
+			return true
+		}
+	}
+	return false
 }
