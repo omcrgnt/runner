@@ -6,9 +6,18 @@ After [github.com/omcrgnt/sdi.Resolve], [Runner] receives []Starter and []Closer
 lifecycle context derived from the run context. The lifecycle context is canceled
 on starter failure (fail-fast) or when the parent run context is canceled; it is
 not canceled when [Runner.Run] returns after starters that exit Start without
-blocking (e.g. background servers). Starters that block until shutdown should wait
-on the lifecycle context passed to Start. [Runner.Stop] releases the lifecycle cancel
-func and closes every closer in reverse registration order.
+blocking (e.g. background servers).
+
+[Starter.Start] must return promptly: spawn background work if needed and watch
+the lifecycle context there. Do not block inside Start until shutdown.
+
+[Runner.Stop] releases the lifecycle cancel func, then closes:
+
+  - each successfully started starter that also implements [Closer] (registration order);
+  - each pure [Closer] (in closers but not also a starter), e.g. DB pools without Start.
+
+Starters whose Start failed are not closed. There is no lifecycle dependency graph
+in sdi; close order is registration order only, not a reverse topo.
 
 Register *Runner via [github.com/omcrgnt/runner/use] (Fixed on [unique.Global]).
 [github.com/omcrgnt/app].App receives Runner through DI and calls Run/Stop.
