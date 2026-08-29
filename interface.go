@@ -25,3 +25,16 @@ type Starter interface {
 type Closer interface {
 	Close(ctx context.Context) error
 }
+
+// LastStarter is a Starter that must run only after every other Starter's
+// Start has returned successfully — e.g. the ops/readiness server, whose
+// own readiness checks read state that other Starters write during Start.
+// Implement it by adding LastStart() (a marker; its body is never called)
+// alongside the existing Start method. Run partitions r.starters by this
+// marker locally — it is not requested as a separate sdi dependency, and
+// any number of Starters may implement it (they run concurrently with each
+// other in the second wave, same no-ordering-guarantee as the first).
+type LastStarter interface {
+	Starter
+	LastStart()
+}
