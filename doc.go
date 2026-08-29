@@ -28,5 +28,12 @@ in sdi; close order is registration order only, not a reverse topo.
 
 Register *Runner via [github.com/omcrgnt/runner/use] (Fixed on [unique.Global]).
 [github.com/omcrgnt/app].App receives Runner through DI and calls Run/Stop.
+
+Breaking v0.23: Runner now requires a gateOpener-compatible resource in the
+registry (see [Gate]) — sdi.Resolve fails without one. Real deployments get
+this for free: [Gate] registers itself on [unique.Global] via this package's
+own init, the same way Runner itself is typically registered. Only a
+hand-built registry (e.g. an isolated unique.New() in a test) needs to add
+one explicitly.
 */
 package runner
