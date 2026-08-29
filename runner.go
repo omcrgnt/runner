@@ -30,7 +30,7 @@ func (r *Runner) Deps() []any {
 	return []any{
 		([]Starter)(nil),
 		([]Closer)(nil),
-		([]gateOpener)(nil),
+		(*gateOpener)(nil),
 	}
 }
 
@@ -41,15 +41,8 @@ func (r *Runner) Inject(args []any) {
 			r.starters = v
 		case []Closer:
 			r.closers = v
-		case []gateOpener:
-			// A gate is optional (fail-open when nothing wires one) — a
-			// registry that never registers a Gate (e.g. a test building a
-			// fresh unique.New() registry by hand) must still resolve.
-			// sdi.Resolve only tolerates zero matches for a many-dep
-			// ([]T stub), not a single-dep one.
-			if len(v) > 0 {
-				r.gate = v[0]
-			}
+		case gateOpener:
+			r.gate = v
 		}
 	}
 }
@@ -76,13 +69,17 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
-	if r.gate != nil {
-		r.gate.Open()
-	}
-
 	if err := r.startBatch(lifecycle, stop, lastIdx); err != nil {
 		r.releaseLifecycle()
 		return err
+	}
+
+	// Open only once both waves have fully succeeded: Ready() must never
+	// report true while Run is about to return an error, and neither wave's
+	// Start reads the gate synchronously (only per-request middleware does,
+	// lazily) — so there is nothing waiting on it to open any earlier.
+	if r.gate != nil {
+		r.gate.Open()
 	}
 	return nil
 }

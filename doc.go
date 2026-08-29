@@ -11,9 +11,16 @@ blocking (e.g. background servers).
 [Starter.Start] must return promptly: spawn background work if needed and watch
 the lifecycle context there. Do not block inside Start until shutdown.
 
+Starters run in two waves: every [Starter] that is not also a [LastStarter]
+first, concurrently, with no ordering between them; only once all of those
+have returned successfully does the second wave — every [LastStarter] — start,
+also concurrently with each other. [Gate] opens once both waves have fully
+succeeded, letting middleware/interceptors elsewhere (e.g. srv-http, srv-grpc)
+hold off real traffic until then; it never opens if either wave fails.
+
 [Runner.Stop] releases the lifecycle cancel func, then closes:
 
-  - each successfully started starter that also implements [Closer] (registration order);
+  - each successfully started starter, either wave, that also implements [Closer] (registration order);
   - each pure [Closer] (in closers but not also a starter), e.g. DB pools without Start.
 
 Starters whose Start failed are not closed. There is no lifecycle dependency graph

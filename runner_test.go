@@ -83,7 +83,9 @@ func (m *lastImmediateStarter) Start(ctx context.Context) error {
 
 func (m *lastImmediateStarter) LastStart() {}
 
-// lastImmediateLifecycle is a Starter+Closer marked LastStarter.
+// lastImmediateLifecycle is used only by TestRunner_StopClosesLastStarterToo,
+// to prove Stop's existing Closer-closing loop needs no changes to also
+// cover the last wave (it iterates r.starters by original index either way).
 type lastImmediateLifecycle struct {
 	mockResource
 }
@@ -250,7 +252,7 @@ func TestRunner_Inject(t *testing.T) {
 	r.Inject([]any{
 		[]Starter{server},
 		[]Closer{server},
-		[]gateOpener{gate},
+		gateOpener(gate),
 	})
 	if len(r.starters) != 1 || len(r.closers) != 1 {
 		t.Fatalf("inject: starters=%d closers=%d", len(r.starters), len(r.closers))
@@ -276,7 +278,7 @@ func TestRunner_LastStarterRunsAfterNormalWave(t *testing.T) {
 	}
 }
 
-func TestRunner_GateOpensBeforeLastWave(t *testing.T) {
+func TestRunner_GateOpensOnlyAfterLastWave(t *testing.T) {
 	gate := &fakeGate{}
 	last := &lastImmediateStarter{mockResource: mockResource{id: "last"}, gate: gate}
 
@@ -285,8 +287,26 @@ func TestRunner_GateOpensBeforeLastWave(t *testing.T) {
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !last.observedGateOpen {
-		t.Fatal("LastStarter ran before Gate.Open")
+	if last.observedGateOpen {
+		t.Fatal("LastStarter observed Gate already open during its own Start")
+	}
+	if !gate.opened {
+		t.Fatal("expected Gate open after Run returns")
+	}
+}
+
+func TestRunner_LastWaveFailure_GateNeverOpens(t *testing.T) {
+	errBoom := errors.New("boom")
+	gate := &fakeGate{}
+	last := &lastImmediateStarter{mockResource: mockResource{id: "last", startErr: errBoom}}
+
+	r := &Runner{starters: []Starter{last}, gate: gate}
+
+	if err := r.Run(context.Background()); !errors.Is(err, errBoom) {
+		t.Fatalf("Run err = %v, want %v", err, errBoom)
+	}
+	if gate.opened {
+		t.Fatal("Gate must not open when the last wave fails — Ready() would lie about readiness")
 	}
 }
 

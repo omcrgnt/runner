@@ -1,16 +1,24 @@
 package runner
 
-import "github.com/omcrgnt/res/unique"
+import (
+	"sync"
 
-// Gate signals that every normal-wave Starter has finished. Open is called
-// once by Runner.Run after the first errgroup.Wait succeeds; Ready is a
-// non-blocking check for anyone gating on it (e.g. srv-http/srv-grpc
-// middleware, deciding whether to serve a request or answer 503/Unavailable).
+	"github.com/omcrgnt/res/unique"
+)
+
+// Gate signals that both Starter waves have finished. Open is called once
+// by Runner.Run after the second wave succeeds; Ready is a non-blocking
+// check for anyone gating on it (e.g. srv-http/srv-grpc middleware,
+// deciding whether to serve a request or answer 503/Unavailable).
 type Gate struct {
-	ch chan struct{}
+	ch   chan struct{}
+	once sync.Once
 }
 
-func (g *Gate) Open() { close(g.ch) }
+// Open is idempotent: *Gate is a fixed singleton (unique.MustAddFixed) and
+// nothing stops a second Runner.Run on the same process — without this,
+// that second call's Open would panic on an already-closed channel.
+func (g *Gate) Open() { g.once.Do(func() { close(g.ch) }) }
 
 func (g *Gate) Ready() bool {
 	select {
