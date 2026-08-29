@@ -9,10 +9,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// gateOpener is Runner's write-side view of [Gate] — a local, narrow
+// interface (rather than depending on *Gate directly) so a fake gate can be
+// injected in tests without constructing a real Gate's unexported channel.
+type gateOpener interface {
+	Open()
+}
+
 // Runner starts [Starter] and stops [Closer] resources injected via sdi after [Deps].
 type Runner struct {
 	starters      []Starter
 	closers       []Closer
+	gate          gateOpener
 	started       []bool
 	startedMu     sync.Mutex
 	stopLifecycle context.CancelFunc
@@ -22,6 +30,7 @@ func (r *Runner) Deps() []any {
 	return []any{
 		([]Starter)(nil),
 		([]Closer)(nil),
+		(*gateOpener)(nil),
 	}
 }
 
@@ -32,6 +41,8 @@ func (r *Runner) Inject(args []any) {
 			r.starters = v
 		case []Closer:
 			r.closers = v
+		case gateOpener:
+			r.gate = v
 		}
 	}
 }
@@ -44,10 +55,40 @@ func (r *Runner) Run(ctx context.Context) error {
 	r.started = make([]bool, len(r.starters))
 	r.startedMu.Unlock()
 
+	var normalIdx, lastIdx []int
+	for i, s := range r.starters {
+		if _, ok := s.(interface{ LastStart() }); ok {
+			lastIdx = append(lastIdx, i)
+		} else {
+			normalIdx = append(normalIdx, i)
+		}
+	}
+
+	if err := r.startBatch(lifecycle, stop, normalIdx); err != nil {
+		r.releaseLifecycle()
+		return err
+	}
+
+	if err := r.startBatch(lifecycle, stop, lastIdx); err != nil {
+		r.releaseLifecycle()
+		return err
+	}
+
+	// Open only once both waves have fully succeeded: Ready() must never
+	// report true while Run is about to return an error, and neither wave's
+	// Start reads the gate synchronously (only per-request middleware does,
+	// lazily) — so there is nothing waiting on it to open any earlier.
+	if r.gate != nil {
+		r.gate.Open()
+	}
+	return nil
+}
+
+func (r *Runner) startBatch(lifecycle context.Context, stop context.CancelFunc, idx []int) error {
 	var g errgroup.Group
 
-	for i, s := range r.starters {
-		i, starter := i, s
+	for _, i := range idx {
+		i, starter := i, r.starters[i]
 		g.Go(func() error {
 			if err := starter.Start(lifecycle); err != nil {
 				stop()
@@ -58,11 +99,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		r.releaseLifecycle()
-		return err
-	}
-	return nil
+	return g.Wait()
 }
 
 func (r *Runner) setStarted(i int, v bool) {
