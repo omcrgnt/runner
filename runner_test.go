@@ -23,9 +23,10 @@ type starter struct {
 	observeFlag    *bool
 	observedBefore bool
 
-	lifecycle context.Context
-	isStarted bool
-	closeN    atomic.Int32
+	lifecycle  context.Context
+	isStarted  bool
+	closeN     atomic.Int32
+	cleanupCtx context.Context
 }
 
 func (m *starter) Start(ctx context.Context) (func(context.Context) error, error) {
@@ -43,7 +44,8 @@ func (m *starter) Start(ctx context.Context) (func(context.Context) error, error
 	return m.cleanup, nil
 }
 
-func (m *starter) cleanup(context.Context) error {
+func (m *starter) cleanup(ctx context.Context) error {
+	m.cleanupCtx = ctx
 	if m.cleanupDelay > 0 {
 		time.Sleep(m.cleanupDelay)
 	}
@@ -374,6 +376,32 @@ func TestRunner_StopClosesLastStarterToo(t *testing.T) {
 	}
 	if last.closeN.Load() != 1 {
 		t.Fatalf("last close count = %d, want 1", last.closeN.Load())
+	}
+}
+
+func TestRunner_Stop_PassesCallerCtxToStartCleanup(t *testing.T) {
+	s := &starter{id: "s"}
+
+	r := &Runner{starters: []Starter{s}}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	if err := r.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if s.cleanupCtx == nil {
+		t.Fatal("Starter cleanup was not called")
+	}
+	if _, ok := s.cleanupCtx.Deadline(); !ok {
+		t.Fatal("Stop's caller ctx (with a deadline) was not passed through to the Starter cleanup — got a context with no deadline, want Stop's own ctx")
+	}
+	if s.cleanupCtx.Err() != nil {
+		t.Fatalf("cleanup ctx already done: %v", s.cleanupCtx.Err())
 	}
 }
 

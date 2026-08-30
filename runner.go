@@ -84,12 +84,12 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	if err := r.startBatch(lifecycle, stop, normalIdx); err != nil {
 		r.releaseLifecycle()
-		return errors.Join(err, r.rollbackStarted(), r.rollbackStandByUpTo(len(r.standBys)))
+		return errors.Join(err, r.rollbackStarted(context.Background()), r.rollbackStandByUpTo(len(r.standBys)))
 	}
 
 	if err := r.startBatch(lifecycle, stop, lastIdx); err != nil {
 		r.releaseLifecycle()
-		return errors.Join(err, r.rollbackStarted(), r.rollbackStandByUpTo(len(r.standBys)))
+		return errors.Join(err, r.rollbackStarted(context.Background()), r.rollbackStandByUpTo(len(r.standBys)))
 	}
 
 	// Open only once both waves have fully succeeded: Ready() must never
@@ -145,7 +145,13 @@ func (r *Runner) startBatch(lifecycle context.Context, stop context.CancelFunc, 
 // registration order, concurrently, since the starters themselves were
 // started concurrently too. Consumed cleanups are cleared so a later Stop
 // does not invoke them again.
-func (r *Runner) rollbackStarted() error {
+//
+// ctx is handed to each cleanup as-is: callers pass context.Background()
+// for Run's own internal unwind (the lifecycle ctx is already being torn
+// down at that point, so it's not a usable deadline source), and Stop
+// passes its caller-supplied ctx through unchanged — same as it already
+// does for StandBy cleanups and pure Closers below.
+func (r *Runner) rollbackStarted(ctx context.Context) error {
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -164,7 +170,7 @@ func (r *Runner) rollbackStarted() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := cleanup(context.Background()); err != nil {
+			if err := cleanup(ctx); err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("start cleanup %T: %w", starter, err))
 				mu.Unlock()
@@ -248,7 +254,7 @@ func (r *Runner) releaseLifecycle() {
 func (r *Runner) Stop(ctx context.Context) error {
 	r.releaseLifecycle()
 
-	startErr := r.rollbackStarted()
+	startErr := r.rollbackStarted(ctx)
 
 	var errs []error
 	if startErr != nil {
